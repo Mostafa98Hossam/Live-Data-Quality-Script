@@ -1,4 +1,4 @@
-# This script is to put all quality edits and errors found in the live-offline-matching for the live collection in one table 
+`# This script is to put all quality edits and errors found in the live-offline-matching for the live collection in one table 
 # showing the mistakes and what is supposed to be correct
 
 # libraries and connections
@@ -54,7 +54,7 @@ con_offline <- dbConnect(dbDriver("PostgreSQL"),
 
 # filter live and quality reviewed matches
 queryinput_matchids <- gs_dailywork %>% 
-  filter(!is.na(Quality) & as.Date(`Match Date`) >= '2022-03-01' & `Live/Replay`=='Live' & Base != Quality & `Extras & F.F`!= Quality
+  filter(!is.na(Quality) & as.Date(`Match Date`) >= '2022-06-01' & `Live/Replay`=='Live' & Base != Quality & `Extras & F.F`!= Quality
          & Players != Quality & `Location & Impact` != Quality)  %>% distinct(MatchID)
 # combine all matchids in one string array
 queryinput_matchids_formatted  <- paste0("'",queryinput_matchids$MatchID,"',")
@@ -501,7 +501,7 @@ df_qualitymistakes_from_edits[is.na(df_qualitymistakes_from_edits)] <- 0
 #######################
 
 df_liveoffline<-dbGetQuery(con_offline,"SELECT lorl.* FROM bi.live_offline_resolution_logs lorl 
-left join matches m on m.id=lorl.offline_match_id where m.match_date >='2022-03-01'")
+left join matches m on m.id=lorl.offline_match_id where m.match_date >='2022-06-01'")
 
 liveoffline_matchids <- df_liveoffline %>% distinct(live_match_id)
 # combine all matchids in one string array
@@ -540,6 +540,16 @@ df_liveoffline_base <- df_liveoffline_withvideotimestamps %>%
          eventvideotimestamp_collector=live_videotimestamp) %>%
   select(matchId,key,teamid,partId,eventname,liveoffline_base_resolution, author,Quality, error, eventvideotimestamp_collector)  
 
+df_liveoffline_extras <- df_liveoffline_withvideotimestamps %>% filter(different_type==1 & Re_diff_type %in% c('Offline right','Both are wrong') &
+                                                                        ( ( live_type %in% c('Ground Pass','High Pass','Low Pass') &
+                                                                             offline_type %in% c('Ground Pass','High Pass','Low Pass') ) |
+                                                                         (live_type == 'Dispossessed' | offline_type == 'Dispossessed') ) ) %>%
+  rename(matchId=live_match_id, key=live_id, teamid=team_id, partId=part_id, eventname=live_type) %>% 
+  mutate(author=live_base_collector, Quality='live/offline',
+         liveoffline_base_resolution=ifelse(Re_diff_type=='Offline right',offline_type,'unknown'), error='extras',
+         eventvideotimestamp_collector=live_videotimestamp) %>%
+  select(matchId,key,teamid,partId,eventname,liveoffline_base_resolution, author,Quality, error, eventvideotimestamp_collector) 
+
 # base mistakes by quality reviewer and collector
 df_base_wrong_in_edits_liveoffline <- left_join(df_alledits %>% 
                                                   filter(key %in% df_liveoffline_base$key & error=='base'),df_liveoffline_base %>% 
@@ -550,7 +560,8 @@ df_all_base_mistakes <- bind_rows(df_alledits %>% filter(error=='base' &
                                                        !(key %in% df_base_wrong_in_edits_liveoffline)) %>% 
                                     mutate(across(everything(), as.character)),
                               df_base_wrong_in_edits_liveoffline %>% mutate(across(everything(), as.character)) ,df_liveoffline_base %>% 
-                                mutate(key_collector=key,eventname_collector=eventname, eventname=NA) %>% 
+                                mutate(key_collector=key,eventname_collector=eventname, 
+                                       eventvideotimestamp=eventvideotimestamp_collector, teamid_collector=teamid) %>% 
                                 filter(!(key %in% df_base_wrong_in_edits_liveoffline))%>% mutate(across(everything(), as.character)))
 # players
 #########
@@ -631,7 +642,7 @@ df_all_location_mistakes <- bind_rows(df_alledits %>% mutate(across(everything()
 # combine all mistakes
 ######################
 
-df_allmistakes<-bind_rows(df_all_base_mistakes , df_all_location_mistakes, df_all_players_mistakes, df_alledits %>% filter(error=='extras') %>% mutate(across(everything(), as.character)))
+df_allmistakes<-bind_rows(df_all_base_mistakes , df_all_location_mistakes, df_all_players_mistakes,df_liveoffline_extras %>% mutate(across(everything(), as.character)),df_alledits %>% filter(error=='extras') %>% mutate(across(everything(), as.character)))
 
 ###################################################################################################################################################################################################################################################################
 
@@ -676,7 +687,7 @@ write.csv(x = df_allmistakes_withplayersnamesandpositions, file = file_name, row
 # quality scores table
 #######################
 
-quality_scores <- df_allmistakes_withplayersnamesandpositions %>% 
+quality_scores <- df_allmistakes %>% 
   mutate(quality_type=ifelse(Quality %in% c('live/offline','edited and changed by live/offline'),Quality,'edited')) %>%
   group_by(matchId,error,quality_type) %>% distinct(key,key_collector) %>% summarise(errors=n()) %>%
   pivot_wider(names_from = c("error","quality_type"),values_from = errors)
@@ -685,4 +696,5 @@ quality_scores <- df_allmistakes_withplayersnamesandpositions %>%
 quality_scores[is.na(quality_scores)] <- 0
 
 file_name = paste0('D:/quality_edits_scores.csv')
+
 write.csv(x = quality_scores, file = file_name, row.names = FALSE)
